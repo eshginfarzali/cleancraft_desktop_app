@@ -1,280 +1,135 @@
 # 🧼 CleanCraft
 
-[🇬🇧 English](#🇬🇧-english-version) | [🇦🇿 Azərbaycan](#🇦🇿-azərbaycan-versiyası)
+[![CI](https://github.com/eshginfarzali/cleancraft_desktop_app/actions/workflows/ci.yml/badge.svg)](https://github.com/eshginfarzali/cleancraft_desktop_app/actions/workflows/ci.yml)
+[![Release](https://github.com/eshginfarzali/cleancraft_desktop_app/actions/workflows/release.yml/badge.svg)](https://github.com/eshginfarzali/cleancraft_desktop_app/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-backend-000000?logo=rust)
+![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+
+A small cross-platform desktop app that finds **old cache and temp files** and deletes them after you confirm. The file-system work is in Rust and the UI is React. Release builds for macOS, Windows and Linux are produced by GitHub Actions.
+
+> 🇦🇿 Azərbaycanca qısa təsvir [aşağıdadır](#-azərbaycanca).
+
+<!-- Add screenshots to docs/screenshots and reference them here, e.g.:
+<p align="center"><img src="docs/screenshots/scan.png" width="420" alt="Scan results" /></p>
+-->
+
+## Features
+
+- **Scan:** for each allowed folder, shows how many files would be removed and how much space they take, plus how many folders could not be read.
+- **Choose and confirm:** folders that have something to clean are pre-selected. Nothing is deleted until you confirm in a dialog that shows the total size.
+- **Clean and report:** shows the space freed, the number of files deleted and how many could not be deleted (for example, files in use).
+- **Non-blocking:** scans and cleans run on a background thread, so the window stays responsive.
+
+## 🛡️ Safety: what gets deleted
+
+CleanCraft works only on this fixed allow-list. The list is defined in Rust ([`src-tauri/src/cleaner.rs`](src-tauri/src/cleaner.rs)). The UI sends target **ids** (`temp`, `user-cache`), never file paths, so the front end cannot point the cleaner anywhere else.
+
+| OS      | Folder                                                       | Target id    |
+| ------- | ------------------------------------------------------------ | ------------ |
+| macOS   | `$TMPDIR` (your per-user temp folder under `/var/folders/…`) | `temp`       |
+| macOS   | `~/Library/Caches`                                           | `user-cache` |
+| Linux   | `$TMPDIR` or `/tmp`                                          | `temp`       |
+| Linux   | `$XDG_CACHE_HOME`, or `~/.cache` if it is not set            | `user-cache` |
+| Windows | `%TEMP%`                                                     | `temp`       |
+
+Inside those folders:
+
+- Only **regular files** whose last modification is **more than 24 hours old** are deleted. Recent files are assumed to be in use.
+- **Symlinks are never followed or deleted**, so a link cannot lead the cleaner outside the folder.
+- **Folders are never removed**, only files, so apps keep their cache directory structure.
+- Sockets, pipes and device files are ignored.
+- Files that cannot be deleted (permissions, locks, other users' files in `/tmp`) are skipped and counted.
+
+CleanCraft **never touches** Downloads, Documents, the Trash or Recycle Bin, browser profiles, system-wide folders such as `/Library/Caches`, `/var` or `C:\Windows\Temp`, or any path outside the table above. Deleted files are **not** moved to the Trash and cannot be recovered.
+
+## Tech stack
+
+| Layer    | Choice                                                                                   |
+| -------- | ---------------------------------------------------------------------------------------- |
+| Shell    | Tauri 2 (strict CSP, core permissions only)                                              |
+| Backend  | Rust: `std::fs` walk with `symlink_metadata`, `serde` for IPC types                      |
+| Frontend | React 19, TypeScript (`strict`), Vite                                                    |
+| Tests    | `cargo test` with `tempfile` / `filetime`; Vitest + Testing Library with Tauri `mockIPC` |
+| CI / CD  | GitHub Actions: lint, typecheck, tests, clippy; `tauri-action` release builds            |
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph UI["React (webview)"]
+    App["App.tsx<br/>scan → select → confirm → clean"]
+    Api["lib/api.ts<br/>invoke('scan_targets') / invoke('clean_targets', ids)"]
+  end
+  subgraph Rust["Rust (src-tauri)"]
+    Cmd["lib.rs commands<br/>spawn_blocking"]
+    Cleaner["cleaner.rs<br/>default_targets · scan · clean"]
+  end
+  FS[("allow-listed folders")]
+
+  App --> Api -- IPC --> Cmd --> Cleaner --> FS
+```
+
+## Install
+
+Download the installer for your OS from [Releases](https://github.com/eshginfarzali/cleancraft_desktop_app/releases). Builds are **not code-signed**:
+
+- **macOS:** the first time, right-click CleanCraft.app and choose **Open**.
+- **Windows:** in SmartScreen, choose **More info → Run anyway**.
+
+## Development
+
+Prerequisites: Node.js 22, Rust (stable), and the [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS.
+
+```bash
+npm install
+npm run tauri dev       # app with hot reload
+npm run tauri build     # installers in src-tauri/target/release/bundle
+```
+
+## Scripts and checks
+
+| Command                                       | Description                        |
+| --------------------------------------------- | ---------------------------------- |
+| `npm run lint`                                | ESLint, zero warnings              |
+| `npm run typecheck`                           | TypeScript for app and Vite config |
+| `npm test`                                    | Vitest (formatting + UI flow)      |
+| `npm run format:check`                        | Prettier                           |
+| `cd src-tauri && cargo test`                  | Rust cleaner tests                 |
+| `cd src-tauri && cargo clippy -- -D warnings` | Rust lints                         |
+
+## Testing
+
+- **Rust** (`cleaner.rs`): builds real temporary directories with backdated files. It checks that only files older than the threshold are counted and deleted, that fresh files and folders survive, that symlinks to files and folders outside the target are left alone, that missing folders are reported, and that the allow-list contains only absolute, existing paths.
+- **Frontend:** byte formatting, plus the full UI flow against a mocked Tauri IPC: the scan pre-selects the right folders, cleaning needs confirmation, Cancel deletes nothing, only target ids are sent, and errors are shown.
+
+## Releases
+
+`.github/workflows/release.yml` runs [`tauri-action`](https://github.com/tauri-apps/tauri-action) when a `v*` tag is pushed. It builds on macOS (Apple Silicon and Intel), Windows and Linux and attaches the installers to a **draft** GitHub Release:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+## Roadmap
+
+- [ ] Move files to the system Trash instead of deleting them permanently
+- [ ] Let the user change the 24-hour age threshold
+- [ ] Per-app breakdown inside `~/Library/Caches` / `~/.cache`
+- [ ] Code signing and notarization for macOS and Windows
+- [ ] Auto-updates via the Tauri updater
+
+## License
+
+[MIT](LICENSE) © Eshgin Farzaliyev
 
 ---
 
-## 🇦🇿 Azərbaycan Versiyası
+## 🇦🇿 Azərbaycanca
 
-**CleanCraft** — Tauri + React texnologiyaları əsasında hazırlanmış yüngül və effektiv **cross-platform sistem təmizləyici** tətbiqdir. Bu tətbiq istifadəçilərə sistem cache fayllarını və müvəqqəti sənədləri silməklə daha sürətli və təmiz bir kompüter təcrübəsi təqdim edir.
+**CleanCraft** müvəqqəti (temp) və cache qovluqlarında **24 saatdan köhnə** faylları tapır və sənin təsdiqindən sonra silir. Fayl əməliyyatları Rust-da, interfeys React-də yazılıb.
 
-### 🚀 Xüsusiyyətlər
+**Silinən qovluqlar:** macOS-da `$TMPDIR` və `~/Library/Caches`; Linux-da `/tmp` və `~/.cache`; Windows-da `%TEMP%`. Symlink-lərə keçid edilmir və qovluqların özü silinmir. Downloads, Documents, Zibil qutusu və sistem qovluqlarına heç vaxt toxunulmur. Silinən fayllar Zibil qutusuna getmir, birdəfəlik silinir.
 
-- ⚡ **Native sürət və performans** - Rust backend sayəsində yüksək performans
-- 🧼 **Hərtərəfli təmizləmə** - Cache, müvəqqəti fayllar və sistem zibilləri
-- 🔒 **Təhlükəsiz əməliyyatlar** - Məhdudlaşdırılmış və təhlükəsiz sistem girişi
-- 💻 **Cross-platform dəstək** - macOS, Windows və Linux
-- 🧑‍💻 **Açıq mənbə** - İstədiyin kimi dəyişdir və genişləndir
-- 🎨 **Modern UI** - React əsaslı intuitiv interfeys
-
-### 📁 Təmizləmə Sahələri
-
-- **macOS:**
-  - `~/Library/Caches/` - Tətbiq cache faylları
-  - `/tmp/` - Müvəqqəti sistem faylları
-  - `~/Downloads/` - Köhnə yüklənmələr (istəyə görə)
-  
-- **Windows:**
-  - `%TEMP%` - Müvəqqəti fayllar
-  - `%APPDATA%/Local/Temp` - İstifadəçi müvəqqəti faylları
-  - Recycle Bin təmizləməsi
-
-- **Linux:**
-  - `/tmp/` - Sistem müvəqqəti faylları
-  - `~/.cache/` - İstifadəçi cache faylları
-
-### 📦 Texnologiyalar
-
-- **Tauri** - Native cross-platform tətbiq framework
-- **Rust** - Performanslı və təhlükəsiz backend
-- **React + Vite** - Interaktiv və sürətli frontend
-- **TypeScript** - Tip təhlükəsizliyi
-
-### 🔧 Quraşdırma
-
-#### 1. Əvvəlcədən lazım olanlar:
-
-- **Əməliyyat sistemi:** macOS, Windows, və ya Linux
-- **[Rust](https://rustup.rs)** - Backend üçün
-- **[Node.js](https://nodejs.org/)** (v16+) - Frontend üçün
-- **Tauri CLI** (qlobal):
-  ```bash
-  npm install -g @tauri-apps/cli
-  ```
-
-#### 2. Layihəni klonlayın:
-
-```bash
-git clone https://github.com/yourusername/cleancraft.git
-cd cleancraft
-```
-
-#### 3. Dependencies quraşdırın:
-
-```bash
-# Frontend dependencies
-npm install
-
-# Rust dependencies (avtomatik yüklənəcək)
-cargo build
-```
-
-#### 4. Development rejimində işə salın:
-
-```bash
-npm run tauri dev
-```
-
-#### 5. Production build:
-
-```bash
-npm run tauri build
-```
-
-### 🎯 İstifadə
-
-1. **Tətbiqi açın** - CleanCraft.app (macOS) və ya CleanCraft.exe (Windows)
-2. **Scan düyməsini basın** - Sistem təhlil ediləcək
-3. **Təmizləmə sahələrini seçin** - Nəyi silmək istədiyinizi müəyyən edin
-4. **Clean düyməsini basın** - Seçilmiş fayllar silinəcək
-5. **Nəticəni yoxlayın** - Azad edilmiş yaddaş həcmini görün
-
-### 🤝 Töhfə vermək
-
-Töhfələr xoş qarşılanır! Zəhmət olmasa:
-
-1. Bu repo-nu fork edin
-2. Feature branch yaradın (`git checkout -b feature/AmazingFeature`)
-3. Dəyişikliklərinizi commit edin (`git commit -m 'Add some AmazingFeature'`)
-4. Branch-ı push edin (`git push origin feature/AmazingFeature`)
-5. Pull Request açın
-
-### 📄 Lisenziya
-
-Bu layihə MIT lisenziyası altında paylaşılır. Ətraflı məlumat üçün [LICENSE](LICENSE) faylına baxın.
-
----
-
-## 🇬🇧 English Version
-
-**CleanCraft** is a lightweight and efficient **cross-platform system cleaner** built with Tauri + React technologies. This application provides users with a faster and cleaner computer experience by removing system cache files and temporary documents.
-
-### 🚀 Features
-
-- ⚡ **Native speed and performance** - High performance through Rust backend
-- 🧼 **Comprehensive cleaning** - Cache, temporary files, and system junk
-- 🔒 **Safe and secure operations** - Restricted and secure system access
-- 💻 **Cross-platform support** - macOS, Windows, and Linux
-- 🧑‍💻 **Open source** - Modify and extend as you wish
-- 🎨 **Modern UI** - React-based intuitive interface
-
-### 📁 Cleaning Areas
-
-- **macOS:**
-  - `~/Library/Caches/` - Application cache files
-  - `/tmp/` - Temporary system files
-  - `~/Downloads/` - Old downloads (optional)
-  
-- **Windows:**
-  - `%TEMP%` - Temporary files
-  - `%APPDATA%/Local/Temp` - User temporary files
-  - Recycle Bin cleaning
-
-- **Linux:**
-  - `/tmp/` - System temporary files
-  - `~/.cache/` - User cache files
-
-### 📦 Technologies
-
-- **Tauri** - Native cross-platform app framework
-- **Rust** - High-performance and secure backend
-- **React + Vite** - Interactive and fast frontend
-- **TypeScript** - Type safety
-
-### 🔧 Installation
-
-#### 1. Prerequisites:
-
-- **Operating System:** macOS, Windows, or Linux
-- **[Rust](https://rustup.rs)** - For backend
-- **[Node.js](https://nodejs.org/)** (v16+) - For frontend
-- **Tauri CLI** (global):
-  ```bash
-  npm install -g @tauri-apps/cli
-  ```
-
-#### 2. Clone the repository:
-
-```bash
-git clone https://github.com/yourusername/cleancraft.git
-cd cleancraft
-```
-
-#### 3. Install dependencies:
-
-```bash
-# Frontend dependencies
-npm install
-
-# Rust dependencies (will be installed automatically)
-cargo build
-```
-
-#### 4. Run in development mode:
-
-```bash
-npm run tauri dev
-```
-
-#### 5. Build for production:
-
-```bash
-npm run tauri build
-```
-
-### 🎯 Usage
-
-1. **Open the application** - CleanCraft.app (macOS) or CleanCraft.exe (Windows)
-2. **Click Scan button** - System will be analyzed
-3. **Select cleaning areas** - Choose what you want to clean
-4. **Click Clean button** - Selected files will be removed
-5. **Check results** - See the amount of freed storage space
-
-### 🛡️ Safety Features
-
-- **Whitelist approach** - Only predefined safe directories are cleaned
-- **Confirmation dialogs** - User confirmation before deletion
-- **Detailed logs** - Track what files are being removed
-- **Backup option** - Option to backup files before deletion (coming soon)
-
-### 📊 System Requirements
-
-| Platform | Minimum Requirements |
-|----------|---------------------|
-| **macOS** | macOS 10.15+ |
-| **Windows** | Windows 10+ |
-| **Linux** | Ubuntu 18.04+ / equivalent |
-| **RAM** | 4GB recommended |
-| **Storage** | 50MB free space |
-
-### 🐛 Troubleshooting
-
-**Common Issues:**
-
-- **Permission denied**: Run the app with administrator privileges
-- **Build fails**: Ensure Rust and Node.js are properly installed
-- **App won't start**: Check system compatibility
-
-**Getting Help:**
-- Check [Issues](https://github.com/yourusername/cleancraft/issues) for known problems
-- Open a new issue with detailed information
-- Join our [Discord community](https://discord.gg/cleancraft) (if available)
-
-### 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork this repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-### 📝 Development Setup
-
-For contributors who want to set up the development environment:
-
-```bash
-# Clone and navigate
-git clone https://github.com/yourusername/cleancraft.git
-cd cleancraft
-
-# Install all dependencies
-npm install
-cargo build
-
-# Start development server
-npm run tauri dev
-
-# Run tests
-npm test
-cargo test
-
-# Format code
-npm run format
-cargo fmt
-```
-
-### 🗺️ Roadmap
-
-- [ ] **v1.1** - Backup functionality before deletion
-- [ ] **v1.2** - Scheduled cleaning tasks  
-- [ ] **v1.3** - Plugin system for custom cleaners
-- [ ] **v2.0** - Cloud storage cleaning integration
-- [ ] **v2.1** - AI-powered smart cleaning suggestions
-
-### 📄 License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-### 🙏 Acknowledgments
-
-- Tauri team for the amazing framework
-- React community for the powerful UI library
-- All contributors who help improve CleanCraft
-
----
-
-**Made with ❤️ by the Eshgin Farzali**
-
-[⬆ Back to top](#🧼-cleancraft)
+İşə salmaq: `npm install`, sonra `npm run tauri dev`.
