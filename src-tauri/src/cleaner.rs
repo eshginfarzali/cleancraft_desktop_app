@@ -408,7 +408,7 @@ mod tests {
         write(&dir.path().join("fresh.tmp"), 999, Duration::from_secs(60));
         let t = file_target(dir.path());
 
-        let result = scan(&t, &[t.clone()], now(), DAY);
+        let result = scan(&t, std::slice::from_ref(&t), now(), DAY);
 
         assert_eq!(result.file_count, 2);
         assert_eq!(result.total_bytes, 150);
@@ -424,7 +424,7 @@ mod tests {
         write(&fresh, 20, Duration::ZERO);
         let t = file_target(dir.path());
 
-        let report = clean(&t, &[t.clone()], now(), DAY);
+        let report = clean(&t, std::slice::from_ref(&t), now(), DAY);
 
         assert_eq!(
             (report.deleted_files, report.freed_bytes, report.failed),
@@ -446,8 +446,11 @@ mod tests {
         std::os::unix::fs::symlink(&precious, dir.path().join("link-to-file")).unwrap();
         let t = file_target(dir.path());
 
-        assert_eq!(scan(&t, &[t.clone()], now(), DAY).file_count, 0);
-        assert_eq!(clean(&t, &[t.clone()], now(), DAY).deleted_files, 0);
+        assert_eq!(scan(&t, std::slice::from_ref(&t), now(), DAY).file_count, 0);
+        assert_eq!(
+            clean(&t, std::slice::from_ref(&t), now(), DAY).deleted_files,
+            0
+        );
         assert!(precious.exists());
     }
 
@@ -455,7 +458,7 @@ mod tests {
     fn missing_root_is_simply_empty() {
         let dir = tempfile::tempdir().unwrap();
         let t = file_target(&dir.path().join("does-not-exist"));
-        let result = scan(&t, &[t.clone()], now(), DAY);
+        let result = scan(&t, std::slice::from_ref(&t), now(), DAY);
         assert_eq!((result.file_count, result.skipped), (0, 0));
     }
 
@@ -488,7 +491,7 @@ mod tests {
         write(&dir.path().join("mid"), 20, 2 * DAY);
         let t = file_target(dir.path());
 
-        let p = preview(&t, &[t.clone()], now(), DAY);
+        let p = preview(&t, std::slice::from_ref(&t), now(), DAY);
 
         let names: Vec<_> = p
             .entries
@@ -507,7 +510,7 @@ mod tests {
             write(&dir.path().join(format!("f{i}")), 1, 2 * DAY);
         }
         let t = file_target(dir.path());
-        let p = preview(&t, &[t.clone()], now(), DAY);
+        let p = preview(&t, std::slice::from_ref(&t), now(), DAY);
         assert_eq!(p.entries.len(), MAX_PREVIEW_ENTRIES);
         assert_eq!(p.total_files, (MAX_PREVIEW_ENTRIES + 5) as u64);
         assert!(p.truncated);
@@ -529,7 +532,7 @@ mod tests {
 
         let report = clean_selected(
             &t,
-            &[t.clone()],
+            std::slice::from_ref(&t),
             &[
                 pick.clone(),
                 fresh.clone(),
@@ -565,7 +568,7 @@ mod tests {
 
         let report = clean_selected(
             &t,
-            &[t.clone()],
+            std::slice::from_ref(&t),
             &[root.join("link/precious.txt")],
             now(),
             DAY,
@@ -586,7 +589,7 @@ mod tests {
         let inner = target("yarn", vec![inner_root], Granularity::File);
         let all = vec![outer.clone(), inner];
 
-        let report = clean_selected(&outer, &all, &[blob.clone()], now(), DAY);
+        let report = clean_selected(&outer, &all, std::slice::from_ref(&blob), now(), DAY);
 
         assert_eq!(report.rejected, 1);
         assert!(blob.exists());
@@ -612,12 +615,12 @@ mod tests {
             Granularity::TopLevelDir,
         );
 
-        let p = preview(&t, &[t.clone()], now(), DAY);
+        let p = preview(&t, std::slice::from_ref(&t), now(), DAY);
         assert_eq!(p.entries.len(), 1);
         assert_eq!(p.entries[0].path, old_project);
         assert_eq!((p.entries[0].size, p.entries[0].files), (42, 2));
 
-        let report = clean(&t, &[t.clone()], now(), DAY);
+        let report = clean(&t, std::slice::from_ref(&t), now(), DAY);
         assert_eq!((report.deleted_files, report.freed_bytes), (2, 42));
         assert!(!old_project.exists());
         assert!(
@@ -640,11 +643,23 @@ mod tests {
             Granularity::TopLevelDir,
         );
 
-        let nested = clean_selected(&t, &[t.clone()], &[project.join("Build")], now(), DAY);
+        let nested = clean_selected(
+            &t,
+            std::slice::from_ref(&t),
+            &[project.join("Build")],
+            now(),
+            DAY,
+        );
         assert_eq!(nested.rejected, 1);
         assert!(project.exists());
 
-        let ok = clean_selected(&t, &[t.clone()], &[project.clone()], now(), DAY);
+        let ok = clean_selected(
+            &t,
+            std::slice::from_ref(&t),
+            std::slice::from_ref(&project),
+            now(),
+            DAY,
+        );
         assert_eq!((ok.deleted_files, ok.rejected), (1, 0));
         assert!(!project.exists());
     }
