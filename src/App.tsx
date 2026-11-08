@@ -1,166 +1,99 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import './App.css';
+import CleanView from './components/CleanView';
+import HistoryView from './components/HistoryView';
+import SettingsView from './components/SettingsView';
+import { I18nProvider, translate } from './i18n';
 import {
-  cleanTargets,
-  type CleanReport,
-  type ScanResult,
-  scanTargets,
+  getSettings,
+  getTargets,
+  saveSettings,
+  type Settings,
+  type TargetInfo,
 } from './lib/api';
-import { formatBytes, pluralize } from './lib/format';
+import { applyTheme } from './lib/theme';
 
-type Phase = 'idle' | 'scanning' | 'confirming' | 'cleaning';
+type Tab = 'clean' | 'history' | 'settings';
+const TABS: Tab[] = ['clean', 'history', 'settings'];
 
 function App() {
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [scans, setScans] = useState<ScanResult[] | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [reports, setReports] = useState<CleanReport[] | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [targets, setTargets] = useState<TargetInfo[]>([]);
+  const [tab, setTab] = useState<Tab>('clean');
   const [error, setError] = useState<string | null>(null);
 
-  const chosen = (scans ?? []).filter((s) => selected.has(s.id));
-  const chosenBytes = chosen.reduce((sum, s) => sum + s.totalBytes, 0);
-  const busy = phase === 'scanning' || phase === 'cleaning';
+  useEffect(() => {
+    Promise.all([getSettings(), getTargets()])
+      .then(([s, list]) => {
+        setSettings(s);
+        setTargets(list);
+      })
+      .catch((e: unknown) => setError(String(e)));
+  }, []);
 
-  async function scan() {
-    setPhase('scanning');
-    setError(null);
-    setReports(null);
+  const theme = settings?.theme ?? 'system';
+  useEffect(() => applyTheme(theme), [theme]);
+
+  const language = settings?.language ?? 'en';
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
+
+  const updateSettings = useCallback(async (next: Settings) => {
+    setSettings(next); // optimistic, so toggles feel instant
     try {
-      const results = await scanTargets();
-      setScans(results);
-      setSelected(
-        new Set(results.filter((r) => r.fileCount > 0).map((r) => r.id)),
-      );
+      const saved = await saveSettings(next);
+      setSettings(saved);
+      setTargets(await getTargets());
     } catch (e) {
       setError(String(e));
-    } finally {
-      setPhase('idle');
     }
-  }
+  }, []);
 
-  async function clean() {
-    setPhase('cleaning');
-    setError(null);
-    try {
-      setReports(await cleanTargets(chosen.map((s) => s.id)));
-      setScans(null);
-      setSelected(new Set());
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setPhase('idle');
-    }
-  }
-
-  const toggle = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  const freed = reports?.reduce((sum, r) => sum + r.freedBytes, 0) ?? 0;
-  const failed = reports?.reduce((sum, r) => sum + r.failed, 0) ?? 0;
+  const t = (key: Parameters<typeof translate>[1]) => translate(language, key);
 
   return (
-    <main className="container">
-      <header>
-        <h1>CleanCraft</h1>
-        <p className="muted">
-          Removes cache and temp files that have not been modified for 24 hours.
-          Nothing outside the folders listed below is ever touched.
-        </p>
-      </header>
-
-      <button className="primary" onClick={scan} disabled={busy}>
-        {phase === 'scanning' ? 'Scanning…' : scans ? 'Scan again' : 'Scan'}
-      </button>
-
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-
-      {scans && (
-        <section aria-label="Scan results">
-          <ul className="targets">
-            {scans.map((s) => (
-              <li key={s.id}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(s.id)}
-                    disabled={busy || s.fileCount === 0}
-                    onChange={() => toggle(s.id)}
-                  />
-                  <span className="target">
-                    <strong>{s.label}</strong>
-                    <code>{s.path}</code>
-                    <span className="muted">
-                      {pluralize(s.fileCount, 'file')} ·{' '}
-                      {formatBytes(s.totalBytes)}
-                      {s.skipped > 0 &&
-                        ` · ${pluralize(s.skipped, 'folder')} not readable`}
-                    </span>
-                  </span>
-                </label>
-              </li>
+    <I18nProvider language={language}>
+      <main className="container">
+        <header>
+          <h1>CleanCraft</h1>
+          <p className="muted">{t('app.tagline')}</p>
+          <nav role="tablist" className="tabs">
+            {TABS.map((name) => (
+              <button
+                key={name}
+                role="tab"
+                aria-selected={tab === name}
+                className={tab === name ? 'active' : undefined}
+                onClick={() => setTab(name)}
+              >
+                {t(`tab.${name}`)}
+              </button>
             ))}
-          </ul>
+          </nav>
+        </header>
 
-          {phase === 'confirming' ? (
-            <div
-              className="confirm"
-              role="alertdialog"
-              aria-label="Confirm clean"
-            >
-              <p>
-                Permanently delete {formatBytes(chosenBytes)} from{' '}
-                {chosen.length === 1 ? 'this folder' : 'these folders'}? This
-                cannot be undone.
-              </p>
-              <div className="row">
-                <button className="danger" onClick={clean}>
-                  Delete
-                </button>
-                <button onClick={() => setPhase('idle')}>Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <button
-              className="danger"
-              disabled={busy || chosen.length === 0 || chosenBytes === 0}
-              onClick={() => setPhase('confirming')}
-            >
-              {phase === 'cleaning'
-                ? 'Cleaning…'
-                : `Clean selected (${formatBytes(chosenBytes)})`}
-            </button>
-          )}
-        </section>
-      )}
-
-      {reports && (
-        <section aria-label="Clean results" className="result">
-          <p>
-            Freed <strong>{formatBytes(freed)}</strong> by deleting{' '}
-            {pluralize(
-              reports.reduce((sum, r) => sum + r.deletedFiles, 0),
-              'file',
-            )}
-            .
+        {error && (
+          <p role="alert" className="error">
+            {translate(language, 'error.prefix', { message: error })}
           </p>
-          {failed > 0 && (
-            <p className="muted">
-              {pluralize(failed, 'file')} could not be deleted (in use or
-              protected) and were left in place.
-            </p>
-          )}
-        </section>
-      )}
-    </main>
+        )}
+
+        {settings && (
+          <div role="tabpanel">
+            {tab === 'clean' && <CleanView targets={targets} />}
+            {tab === 'history' && <HistoryView />}
+            {tab === 'settings' && (
+              <SettingsView
+                settings={settings}
+                targets={targets}
+                onChange={updateSettings}
+              />
+            )}
+          </div>
+        )}
+      </main>
+    </I18nProvider>
   );
 }
 

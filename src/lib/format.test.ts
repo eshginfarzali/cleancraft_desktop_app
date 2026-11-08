@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, pluralize } from './format';
+import { formatBytes, formatDateTime, relativeToRoots } from './format';
 
 describe('formatBytes', () => {
   it.each([
@@ -16,9 +16,26 @@ describe('formatBytes', () => {
   });
 });
 
-describe('pluralize', () => {
-  it('adds an s except for one', () => {
-    expect(pluralize(1, 'file')).toBe('1 file');
-    expect(pluralize(1200, 'file')).toBe('1,200 files');
+describe('relativeToRoots', () => {
+  it('strips the matching root on POSIX and Windows paths', () => {
+    expect(
+      relativeToRoots('/Users/me/Library/Caches/app/a.db', [
+        '/Users/me/Library/Caches',
+      ]),
+    ).toBe('app/a.db');
+    expect(relativeToRoots('C:\\Temp\\x\\y.tmp', ['C:\\Temp'])).toBe(
+      'x\\y.tmp',
+    );
+  });
+
+  it('does not treat a sibling folder with the same prefix as inside the root', () => {
+    expect(relativeToRoots('/tmp2/file', ['/tmp'])).toBe('/tmp2/file');
+  });
+});
+
+describe('formatDateTime', () => {
+  it('formats with the given locale', () => {
+    const ms = Date.UTC(2026, 0, 5, 12, 0);
+    expect(formatDateTime(ms, 'en-US')).toMatch(/2026/);
   });
 });
