@@ -1,50 +1,99 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useCallback, useEffect, useState } from 'react';
+import './App.css';
+import CleanView from './components/CleanView';
+import HistoryView from './components/HistoryView';
+import SettingsView from './components/SettingsView';
+import { I18nProvider, translate } from './i18n';
+import {
+  getSettings,
+  getTargets,
+  saveSettings,
+  type Settings,
+  type TargetInfo,
+} from './lib/api';
+import { applyTheme } from './lib/theme';
+
+type Tab = 'clean' | 'history' | 'settings';
+const TABS: Tab[] = ['clean', 'history', 'settings'];
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [targets, setTargets] = useState<TargetInfo[]>([]);
+  const [tab, setTab] = useState<Tab>('clean');
+  const [error, setError] = useState<string | null>(null);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  useEffect(() => {
+    Promise.all([getSettings(), getTargets()])
+      .then(([s, list]) => {
+        setSettings(s);
+        setTargets(list);
+      })
+      .catch((e: unknown) => setError(String(e)));
+  }, []);
+
+  const theme = settings?.theme ?? 'system';
+  useEffect(() => applyTheme(theme), [theme]);
+
+  const language = settings?.language ?? 'en';
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
+
+  const updateSettings = useCallback(async (next: Settings) => {
+    setSettings(next); // optimistic, so toggles feel instant
+    try {
+      const saved = await saveSettings(next);
+      setSettings(saved);
+      setTargets(await getTargets());
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  const t = (key: Parameters<typeof translate>[1]) => translate(language, key);
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <I18nProvider language={language}>
+      <main className="container">
+        <header>
+          <h1>CleanCraft</h1>
+          <p className="muted">{t('app.tagline')}</p>
+          <nav role="tablist" className="tabs">
+            {TABS.map((name) => (
+              <button
+                key={name}
+                role="tab"
+                aria-selected={tab === name}
+                className={tab === name ? 'active' : undefined}
+                onClick={() => setTab(name)}
+              >
+                {t(`tab.${name}`)}
+              </button>
+            ))}
+          </nav>
+        </header>
 
-      <div className="row">
-        <a href="https://vitejs.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://reactjs.org" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+        {error && (
+          <p role="alert" className="error">
+            {translate(language, 'error.prefix', { message: error })}
+          </p>
+        )}
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+        {settings && (
+          <div role="tabpanel">
+            {tab === 'clean' && <CleanView targets={targets} />}
+            {tab === 'history' && <HistoryView />}
+            {tab === 'settings' && (
+              <SettingsView
+                settings={settings}
+                targets={targets}
+                onChange={updateSettings}
+              />
+            )}
+          </div>
+        )}
+      </main>
+    </I18nProvider>
   );
 }
 
